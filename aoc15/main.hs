@@ -39,6 +39,13 @@ keepMiddle (a, b, c) = b
 move :: Pos -> Dir -> Pos
 move (x,y) (dx, dy) = (x+dx,y+dy)
 
+-- Not available in my installed version
+traceWith :: (a -> String) -> a -> a
+traceWith f a = trace (f a) a
+
+traceShowWith :: Show b => (a -> b) -> a -> a
+traceShowWith f = traceWith (show . f)
+
 -- Parsing
 
 parseDir :: Char -> Dir
@@ -137,21 +144,32 @@ doubleBoxes boxes = Set.foldr doubleBox Set.empty boxes
 doubleState :: State -> State
 doubleState (walls, boxes, (x,y)) = (doubleWalls walls, doubleBoxes boxes, (x*2,y))
 
+getBoxPos :: Pos -> Boxes -> Maybe Pos
+getBoxPos (x, y) boxes | Set.member (x,y) boxes = Just (x,y)
+                       | Set.member (x-1,y) boxes = Just (x-1,y)
+                       | otherwise = Nothing
+                       
 isAgainstTheWallV :: (Walls, Boxes) -> Dir -> Pos -> Bool
-isAgainstTheWallV (walls, boxes) d p | Set.member p walls = True
-                                     | Set.member p boxes = isAgainstTheWallV state d np || isAgainstTheWallV state d (move br d)
-                                     | Set.member bl boxes = isAgainstTheWallV state d np || isAgainstTheWallV state d (move bl d)
-                                     | otherwise = False
+isAgainstTheWallV (walls, boxes) d p | (Set.member nbl walls) || (Set.member nbr walls) = True
+                                     | (isNothing nblp) && (isNothing nbrp) = False
+                                     | nblp == nbrp = isAgainstTheWallV state d $ fromJust nblp
+                                     | otherwise = or $ map (isAgainstTheWallV state d) $ catMaybes [nblp, nbrp]
                                      where state = (walls, boxes)
-                                           bl = boxL p
+                                           bl = p
                                            br = boxR p
-                                           np = move p d
+                                           nbl = move bl d
+                                           nbr = move br d
+                                           nblp = getBoxPos nbl boxes
+                                           nbrp = getBoxPos nbr boxes
 
 pushBoxesVIn :: Walls -> Boxes -> Dir -> Pos -> Boxes
-pushBoxesVIn walls boxes d p | Set.member p boxes = Set.insert p $ pushBoxesVIn walls (Set.delete p boxes) d (move p d)
-                             | Set.member (boxL p) boxes && Set.member (boxR p) boxes = Set.insert p $ pushBoxesVIn walls (Set.delete (boxR p) (pushBoxesVIn walls (Set.delete (boxL p) boxes) d (move (boxL p) d))) d (move (boxR p) d)
-                             | Set.member (boxR p) boxes = Set.insert p $ pushBoxesVIn walls (Set.delete (boxR p) boxes) d (move (boxR p) d)
-                             | otherwise = Set.insert p boxes
+pushBoxesVIn walls boxes d p | (isNothing blp) && (isNothing brp) = Set.insert p boxes
+                             | blp == brp = Set.insert p $ pushBoxesVIn walls (Set.delete (fromJust blp) boxes) d (move (fromJust blp) d)
+                             | otherwise = Set.insert p $ foldr (\p b -> pushBoxesVIn walls (Set.delete p b) d (move p d)) boxes $ catMaybes [blp, brp]
+                             where bl = p
+                                   br = boxR p
+                                   blp = getBoxPos bl boxes
+                                   brp = getBoxPos br boxes
 
 isAgainstTheWallH :: (Walls, Boxes) -> Dir -> Pos -> Bool
 isAgainstTheWallH (walls, boxes) d p | Set.member p walls = True
@@ -173,15 +191,11 @@ pushBoxesH (walls,boxes,pos) d | isAgainstTheWallH (walls, boxes) d newPos = (wa
                                      box = if d == right then newPos else boxL newPos
 
 pushBoxesV :: State -> Dir -> State
-pushBoxesV (walls,boxes,pos) d | isAgainstTheWallV (walls, boxes) d newPos = (walls,boxes,pos)
-                               | Set.member newPos boxes = case pushBoxesVIn walls (Set.delete newPos boxes) d (move newPos d)
-                                                           of moved -> (walls,moved,newPos)
-                               | Set.member newPosL boxes = case pushBoxesVIn walls (Set.delete newPosL boxes) d (move newPosL d)
-                                                            of moved -> (walls,moved,newPos)
-                               | otherwise = error ("unexpected" ++ show ((walls,boxes,pos), d))
+pushBoxesV (walls,boxes,pos) d | isAgainstTheWallV (walls, boxes) d boxPos = (walls,boxes,pos)
+                               | otherwise = case pushBoxesVIn walls (Set.delete boxPos boxes) d (move boxPos d)
+                                             of moved -> (walls,moved,newPos)
                                where newPos = move pos d
-                                     newPosL = boxL newPos
-
+                                     boxPos = fromJust $ getBoxPos newPos boxes
 
 pushBoxes2 :: State -> Dir -> State
 pushBoxes2 state dir | dir == right || dir == left = pushBoxesH state dir
@@ -189,7 +203,7 @@ pushBoxes2 state dir | dir == right || dir == left = pushBoxesH state dir
                      | otherwise = error "unexpected direction"
                      
 hasBox :: Pos -> Boxes -> Bool
-hasBox (x,y) boxes = Set.member (x,y) boxes || Set.member (x-1,y) boxes
+hasBox p boxes = isJust $ getBoxPos p boxes
 
 oneStep2 :: State -> Dir -> State
 oneStep2 (walls,boxes,pos) dir | isWall = (walls,boxes,pos)
@@ -199,10 +213,22 @@ oneStep2 (walls,boxes,pos) dir | isWall = (walls,boxes,pos)
                                      isBox = hasBox npos boxes
                                      isWall = Set.member npos walls
 
-allStep2 :: State -> [Dir] -> State
-allStep2 state [] = state
-allStep2 state (x:xs) = allStep2 (oneStep2 state x) xs
+countBoxes :: State -> Int
+countBoxes (walls,boxes,pos) = length boxes
+  
+control :: State -> State -> Bool
+control s1 s2 = (countBoxes s1 == countBoxes s2)
 
+allStep2 :: State -> [Dir] -> Int -> (State, Int)
+allStep2 state [] n = (state, n)
+allStep2 state (x:xs) n | control state newState = (newState, newN)
+                        | otherwise = (state, n)
+                        where (newState, newN) = allStep2 (oneStep2 state x) xs (n + 1)
+
+nStep2 :: State -> [Dir] -> Int -> State
+nStep2 state _ 0 = state
+nStep2 state (x:xs) n = nStep2 (oneStep2 state x) xs (n - 1)
+                        
 -- Printing
 
 grid2char :: State -> Pos -> Char
@@ -230,12 +256,11 @@ stringMap isBig (w, h) state = stringMapIn isBig (w, h) state (w-1, h-1)
 printState :: Bool -> Size -> State -> IO ()
 printState isBig size state = putStrLn $ stringMap isBig size state
 
-
 -- Main
 
 test gridStr dirStr expStr = do
   let (state, dirs, size) = parse2 [gridStr, dirStr]
-  let resStr = stringMap True size $ allStep2 state dirs
+  let resStr = stringMap True size $ fst $ allStep2 state dirs 0
   putStrLn (if resStr == expStr then "\ESC[32mOK\ESC[0m " 
                                 else ("\ESC[31mERROR\ESC[0m\n" ++ resStr ++ "\n\ESC[31mExpected\ESC[0m\n" ++ expStr))
 
@@ -265,23 +290,15 @@ dbg = do
   test "##.O.@." "<<" "##[]@.."
   test "##..O.@" "<<<" "##[]@.."
   test "##.O.O.@" "<<" "##[][]@."
-  
   test ".#.\n.O.\n.@." "^" ".#.\n.[]\n.@."
   test ".#.\nO..\n.@." "^" ".#.\n[].\n.@."
   test "#..\n.O.\n.@." "^" "#[]\n.@.\n..."
   test "..#\nO..\n.@." "^" "[]#\n.@.\n..."
   test "....\nO.O.\n.O..\n..@." "^" "[][]\n.[].\n..@.\n...."
-{-
-  let (state, size) = parseInner (0,0) ".@O..##"
-  print (state, size)
-  let dirs = parseAllDir ">"
-  printState True size state
-  print state
-  let newState = allStep2 state dirs
-  printState True size newState
-  print newState
-  print $ parseInner (0,0) "..@O.##"
--}
+  test "....\nO...\n.O..\n..@." "^" "[]..\n.[].\n..@.\n...."
+  test "....\nO...\n..O.\n..@." "^" "....\n[][]\n..@.\n...."
+  test "####\nO...\n.O..\n..@." "^" "####\n[]..\n.[].\n..@."
+  test ".#..\n.O..\n..@." "^" ".#..\n.[].\n..@."
 
 q1 filename = do 
   content <- readFile filename
@@ -291,21 +308,35 @@ q1 filename = do
 q2 filename = do 
   content <- readFile filename
   let (state, dirs, size) = parse content
-  print $ score $ allStep2 (doubleState state) dirs
+  print $ score $ fst $ allStep2 (doubleState state) dirs 0
+
+q2printLoop :: State -> Size -> [Dir] -> IO ()
+q2printLoop _ _ [] = return ()
+q2printLoop state size (x:xs) = do
+  let newState = oneStep2 state x
+  print x
+  printState True size newState
+  q2printLoop newState size xs
   
+
 q2print filename = do 
   content <- readFile filename
   let (state, dirs, (w,h)) = parse content
-  let newState = allStep2 (doubleState state) dirs
-  printState True (w*2,h) newState
-  print $ score $ newState
+  let dblState = (doubleState state)
+  q2printLoop dblState (w*2,h) dirs
+--  let (newState, rest) = allStep2 (doubleState state) dirs 0
+--  printState True (w*2,h) newState
+--  print $ score $ newState
+--  print $ (countBoxes state, countBoxes newState)
+--  printState True (w*2,h) $ nStep2 (doubleState state) dirs (rest - 1)
+--  printState True (w*2,h) $ nStep2 (doubleState state) dirs (rest - 2)
+--  printState True (w*2,h) $ nStep2 (doubleState state) dirs (rest - 3)
 
 main = do 
+--  dbg
   q1 "test1.txt"
   q1 "test2.txt"
   q1 "data.txt"
   q2 "test2.txt"
-  q2print "test3.txt"
-  q2print "data.txt"
-
--- 1501897 is too low
+  q2 "test3.txt"
+  q2 "data.txt"
