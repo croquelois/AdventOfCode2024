@@ -87,14 +87,14 @@ shortestPaths allPaths str = shortestPathsIn allPaths ("A" ++ str)
 shortestPathsArr :: Map.Map (Char, Char) (Set.Set String) -> [String] -> [String]
 shortestPathsArr allPaths = concat . map (shortestPaths allPaths)
 
-computeRnDRec :: Int -> [String] -> Int
-computeRnDRec n keys | n == 1 = min
-                     | otherwise = computeRnDRec (n - 1) $ filter ((== min) . length) all
-                    where all = shortestPathsArr dirpadPaths keys
-                          min = minimum $ map length all
+computeRn :: Int -> [String] -> Int
+computeRn n keys | n == 1 = min
+                 | otherwise = computeRn (n - 1) $ filter ((== min) . length) all
+                 where all = shortestPathsArr dirpadPaths keys
+                       min = minimum $ map length all
 
 computeRnD :: Int -> String -> Int
-computeRnD nBot code = computeRnDRec nBot (filter ((== min) . length) all) 
+computeRnD nBot code = computeRn nBot (filter ((== min) . length) all) 
                      where all = shortestPathsArr digicodePaths [code]
                            min = minimum $ map length all
 
@@ -102,17 +102,78 @@ scoreRnD :: Int -> String -> Int
 scoreRnD nBot code = numPartOfCode * lengthOfBestPath
                    where numPartOfCode = read $ take 3 code
                          lengthOfBestPath = computeRnD nBot code
+
+best = Map.fromList [
+  ("", "A"),
+  ("^", "<A>A"),
+  (">", "vA^A"),
+  ("v", "<vA^>A"),
+  ("<", "v<<A>>^A"),
+  ("^>", "<Av>A^A"),
+  ("^<", "<Av<A>>^A"),
+  ("v>", "<vA>A^A"),
+  ("v<", "<vA<A>>^A"),
+  ("v<<", "<vA<AA>>^A"),
+  (">>", "vAA^A"),
+  (">^", "vA<^A>A"),
+  (">v", "vA<A^>A"),
+  (">^>", "vA<^Av>A^A"),
+  (">>^", "vAA<^A>A"),
+  ("<<", "v<<AA>>^A"),
+  ("<v", "v<<A>A^>A"),
+  ("<^", "v<<A>^A>A"),
+  ("<v<", "v<<A>A<A>>^A")]
+
+find :: Ord k => k -> Map.Map k a -> a
+find k m = case Map.lookup k m of
+    Nothing -> error "Map.find: element not in the map"
+    Just x  -> x
+    
+computeNstr :: Int -> String -> String
+computeNstr 0 code = code
+computeNstr n code = computeNstr (n-1) $ concat $ map ((flip find) best) $ splitOn "A" $ init code
+
+findBests :: String -> Int -> Set.Set (Int, String)
+findBests keys n = Set.fromList $ map (\s -> (computeRn n [s], s)) $ shortestPaths dirpadPaths keys
+
+
+computeN :: Int -> String -> Int
+computeN n code = minimum $ map (length . (computeNstr (n - 1))) $ shortestPathsArr dirpadPaths $ shortestPaths digicodePaths code
+
+scoreN :: Int -> String -> Int
+scoreN nBot code = numPartOfCode * lengthOfBestPath
+                   where numPartOfCode = read $ take 3 code
+                         lengthOfBestPath = computeN nBot code
+
+extendOne :: Map.Map String Int -> String -> Int
+extendOne m k = sum $ map ((flip find) m) $ splitOn "A" $ init $ find k best
+
+extend :: Map.Map String Int -> Map.Map String Int
+extend m = Map.fromList $ map (\k -> (k, extendOne m k)) $ Map.keys m
+
+extendN :: Int -> Map.Map String Int -> Map.Map String Int
+extendN 0 m = m
+extendN n m = extend $ (extendN (n - 1)) m
+
+computeFromExt :: Map.Map String Int -> String -> Int
+computeFromExt m code = minimum $ map (\k -> sum $ map ((flip find) m) $ splitOn "A" $ init k) $ shortestPathsArr dirpadPaths $ shortestPaths digicodePaths code
+
+scoreNExt :: Int -> String -> Int
+scoreNExt nBot code = numPartOfCode * lengthOfBestPath
+                    where numPartOfCode = read $ take 3 code
+                          lengthOfBestPath = computeFromExt ((extendN (nBot - 2)) $ Map.map length best) code
+
 -- Main
 
 q1 filename = do 
   content <- readFile filename
-  print $ sum $ map (scoreRnD 2) $ lines content
+  print $ sum $ map (scoreN 2) $ lines content
 
 q2 filename = do 
   content <- readFile filename
-  print $ sum $ map (scoreRnD 3) $ lines content
+  print $ sum $ map (scoreNExt 25) $ lines content
 
-main = do 
+main = do
   q1 "test1.txt"
   q1 "data.txt"
---  q2 "data.txt"
+  q2 "data.txt"
